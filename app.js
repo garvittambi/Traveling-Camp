@@ -1,78 +1,81 @@
-if(process.env.NODE_ENV !== "production"){
-   require("dotenv").config();
+if (process.env.NODE_ENV !== "production") {
+    require('dotenv').config();
 }
 
-const express =  require("express");
-const mongoose =  require("mongoose");
-const app = express();
+const express = require('express');
 const path = require('path');
-const methodOverride =  require("method-override");
-const ejsMate  =  require("ejs-mate");
-const  ExpressError =  require("./utils/ExpressError");
-const {campgroundSchema,reviewSchema} = require("./schemas.js");
-const expressSession =  require("express-session");
-const flash =  require("connect-flash");
-const passport = require("passport");
-const LocalStrategy = require("passport-local");
-const User =  require("./models/user");
+const mongoose = require('mongoose');
+const ejsMate = require('ejs-mate');
+const session = require('express-session');
+const flash = require('connect-flash');
+const ExpressError = require('./utils/ExpressError');
+const methodOverride = require('method-override');
+const passport = require('passport');
+const LocalStrategy = require('passport-local');
+const User = require('./models/user');
+const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
-const helmet = require("helmet");
-const MongoDBStore = require("connect-mongo")(expressSession);
+const userRoutes = require('./routes/user');
+const campgroundRoutes = require('./routes/campground');
+const reviewRoutes = require('./routes/review');
+
+const MongoDBStore = require("connect-mongo")(session);
+
 const dbUrl = process.env.DB_URL || 'mongodb://localhost:27017/yelp-camp';
-//const localDBUrl = 'mongodb://localhost:27017/yelp-camp';
-const secret =  process.env.SECRET || "I want to spend All beatiful moments with you but it can take place only in my Memories";
 
-
-const campgroundsRoutes =  require("./routes/campground");
-
-const reviewsRoutes =  require("./routes/review");
-
-const userRoutes = require("./routes/user");
-const { contentSecurityPolicy } = require("helmet");
-const { session } = require("passport");
-
-const store =  new MongoDBStore({
-   url: dbUrl,
-   secret,
-   touchAfter : 24*60*60
+mongoose.connect(dbUrl, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
 });
 
-store.on("error", function(e) {
-   console.log("SESSION STORE ERROR", e);
+const db = mongoose.connection;
+db.on("error", console.error.bind(console, "connection error:"));
+db.once("open", () => {
+    console.log("Database connected");
+});
+
+const app = express();
+
+app.engine('ejs', ejsMate)
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'))
+
+app.use(express.urlencoded({ extended: true }));
+app.use(methodOverride('_method'));
+app.use(express.static(path.join(__dirname, 'public')))
+app.use(mongoSanitize({
+    replaceWith: '_'
+}))
+const secret = process.env.SECRET || 'thisshouldbeabettersecret!';
+
+const store = new MongoDBStore({
+    url: dbUrl,
+    secret,
+    touchAfter: 24 * 60 * 60
+});
+
+store.on("error", function (e) {
+    console.log("SESSION STORE ERROR", e)
 })
 
 const sessionConfig = {
-   store,
-   name: "session",
-   secret,
-   resave: false,
-   saveUninitialized: true,
-   cookie: {
-      httpOnly: true,
-      expires: Date.now() + 1000*60*60*24*7,
-      maxAge:  1000*60*60*24*7,
-   }
+    store,
+    name: 'session',
+    secret,
+    resave: false,
+    saveUninitialized: true,
+    cookie: {
+        httpOnly: true,
+        // secure: true,
+        expires: Date.now() + 1000 * 60 * 60 * 24 * 7,
+        maxAge: 1000 * 60 * 60 * 24 * 7
+    }
 }
 
-//'mongodb://localhost:27017/yelp-camp'
-mongoose.connect(dbUrl,{useNewUrlParser: true,useUnifiedTopology:true});
-const db = mongoose.connection;
-db.on('error', console.error.bind(console, 'connection error:'));
-db.once('open', function() {
-   console.log("Database Connected!!");
-})
-app.engine('ejs',ejsMate);
-
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname,'views'));
-
-
-app.use(express.urlencoded({extended : true}));
-app.use(methodOverride('_method'));
-
-app.use(expressSession(sessionConfig));
+app.use(session(sessionConfig));
 app.use(flash());
-app.use(helmet({contentSecurityPolicy : false}));
+app.use(helmet());
+
 
 const scriptSrcUrls = [
    "https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js" ,
@@ -121,74 +124,42 @@ app.use(
 );
 
 
-
 app.use(passport.initialize());
 app.use(passport.session());
-passport.use(new LocalStrategy(User.authenticate()))
-
-
-app.use("/campgrounds", campgroundsRoutes);
-app.use("/campgrounds/:id/reviews",reviewsRoutes);
-app.use("/", userRoutes);
-app.use(express.static(path.join(__dirname,"public")));
-app.use(mongoSanitize());
-
+passport.use(new LocalStrategy(User.authenticate()));
 
 passport.serializeUser(User.serializeUser());
 passport.deserializeUser(User.deserializeUser());
 
-app.use((req,res,next) => {
-   res.locals.currentUser = req.user;
-   res.locals.success = req.flash('success');
-   res.locals.error =  req.flash("error");
-   next();
+app.use((req, res, next) => {
+    res.locals.currentUser = req.user;
+    res.locals.success = req.flash('success');
+    res.locals.error = req.flash('error');
+    next();
 })
 
 
-const validateCampground = (req,res,next) =>{
-   const {error} = campgroundSchema.validate(req.body);
-   if(error){
-      const msg = error.details.map(el =>el.message).join(',');
-      throw new  ExpressError(msg, 400);
-   }else{
-      next();
-   }
-}
+app.use('/', userRoutes);
+app.use('/campgrounds', campgroundRoutes)
+app.use('/campgrounds/:id/reviews', reviewRoutes)
 
-const validateReview = (req,res,next) => {
-   const {error} = reviewSchema.validate(req.body);
-   if(error){
-      const msg = error.details.map(el => el.message).join(',');
-      throw new ExpressError(msg, 400);
-   }else{
-      next();
-   }
-}
-/*
-app.get("/nakliUpbhokta", async (req,res) => {
-const upbhokta = new User({email: "MukeshMeraBaap@gmail.com", username: "SastaAnant"})
-const nayeUpbhokta = await User.register(upbhokta ,  "Reliance69@MereLawdeP");
-res.send(nayeUpbhokta);
-})
-*/
 
-app.get('/', (req,res) =>{
-    res.render("home");
+app.get('/', (req, res) => {
+    res.render('home')
+});
+
+
+app.all('*', (req, res, next) => {
+    next(new ExpressError('Page Not Found', 404))
 })
 
-
-app.all("*", (req,res,next) =>{
-   next(new ExpressError("Page Not Found",404))
-})
-
-
-app.use((err,req,res,next) => {
-   const {statusCode=500} = err;
-   if(!err.message)err.message = "Something Went wrong Here"
-   res.status(statusCode).render("error",{err});
+app.use((err, req, res, next) => {
+    const { statusCode = 500 } = err;
+    if (!err.message) err.message = 'Oh No, Something Went Wrong!'
+    res.status(statusCode).render('error', { err })
 })
 
 const port = process.env.PORT || 3000;
-app.listen(port, () =>{
-  console.log(`Serving on port ${port}`);
+app.listen(port, () => {
+    console.log(`Serving on port ${port}`)
 })
